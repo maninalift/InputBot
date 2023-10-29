@@ -16,7 +16,10 @@ use nix::{
 };
 use once_cell::sync::Lazy;
 use std::{
+    fs::{File, OpenOptions},
     mem::MaybeUninit,
+    os::fd::{FromRawFd, IntoRawFd},
+    os::unix::io::OwnedFd,
     os::unix::io::RawFd,
     path::Path,
     ptr::null,
@@ -222,16 +225,19 @@ impl LibinputInterfaceRaw {
 }
 
 impl LibinputInterface for LibinputInterfaceRaw {
-    fn open_restricted(&mut self, path: &Path, flags: i32) -> std::result::Result<RawFd, i32> {
+    fn open_restricted(&mut self, path: &Path, flags: i32) -> std::result::Result<OwnedFd, i32> {
         if let Ok(fd) = open(path, OFlag::from_bits_truncate(flags), Mode::empty()) {
-            Ok(fd)
+            let ofd = unsafe { File::from_raw_fd(fd) };
+            Ok(ofd.into())
         } else {
             Err(1)
         }
     }
 
-    fn close_restricted(&mut self, fd: RawFd) {
-        let _ = close(fd);
+    fn close_restricted(&mut self, fd: OwnedFd) {
+        unsafe {
+            File::from(fd);
+        }
     }
 }
 
@@ -271,8 +277,7 @@ fn handle_input_event(event: Event) {
                 if keyboard_key_event.key_state() == KeyState::Pressed {
                     KEY_STATES.lock().unwrap().insert(keybd_key, true);
 
-                    if let Some(Bind::Normal(cb)) = KEYBD_BINDS.lock().unwrap().get(&keybd_key)
-                    {
+                    if let Some(Bind::Normal(cb)) = KEYBD_BINDS.lock().unwrap().get(&keybd_key) {
                         let cb = Arc::clone(cb);
                         spawn(move || cb());
                     }
@@ -293,9 +298,7 @@ fn handle_input_event(event: Event) {
             } {
                 if button_event.button_state() == ButtonState::Pressed {
                     BUTTON_STATES.lock().unwrap().insert(mouse_button, true);
-                    if let Some(Bind::Normal(cb)) =
-                        MOUSE_BINDS.lock().unwrap().get(&mouse_button)
-                    {
+                    if let Some(Bind::Normal(cb)) = MOUSE_BINDS.lock().unwrap().get(&mouse_button) {
                         let cb = Arc::clone(cb);
                         spawn(move || cb());
                     };
